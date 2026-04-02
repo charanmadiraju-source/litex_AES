@@ -1,3 +1,152 @@
+# AES-128 Accelerator SoC for PYNQ-Z2 (LiteX)
+
+A complete AES-128 encryption/decryption hardware accelerator built on the
+PYNQ-Z2 FPGA using the LiteX SoC framework.
+
+## Project Overview
+
+| Item | Value |
+|------|-------|
+| Board | PYNQ-Z2 (XC7Z020-CLG400-1) |
+| CPU | VexRiscv (RISC-V RV32I soft core) |
+| Clock | 125 MHz PL oscillator (pin H16) |
+| UART | 115200 baud via PMOD JA1/JA2 |
+| AES | 128-bit key, encrypt + decrypt, 11 clock cycle latency |
+| Build | LiteX + Vivado (no block design, no PS7) |
+
+## Project Structure
+
+```
+project/
+├── rtl/
+│   ├── aes_sbox.v          # AES forward S-Box (256-entry combinatorial)
+│   ├── aes_inv_sbox.v      # AES inverse S-Box
+│   ├── aes_mixcol.v        # MixColumns (single column, GF(2^8))
+│   ├── aes_inv_mixcol.v    # InvMixColumns
+│   ├── aes_key_expand.v    # Key expansion — all 11 round keys combinatorial
+│   ├── aes_enc_round.v     # One encryption round (SubBytes→ShiftRows→MixColumns→ARK)
+│   ├── aes_dec_round.v     # One decryption round (InvShiftRows→InvSubBytes→ARK→InvMixColumns)
+│   ├── aes_core.v          # AES FSM top-level (11-cycle latency)
+│   └── aes_litex_wrapper.v # Start edge-detect shim instantiated by soc_litex.py
+├── sw/
+│   ├── main.c              # Firmware: encrypt "Hello, PYNQ-Z2!", decrypt, print via UART
+│   ├── uart.h              # Polling UART helpers (putchar / puts / print_hex)
+│   ├── aes_driver.h        # AES CSR register access + aes_run() helper
+│   ├── linker.ld           # RISC-V bare-metal linker script
+│   └── crt0.S              # Minimal startup (stack, .data copy, .bss zero, call main)
+├── soc_litex.py            # LiteX SoC builder (platform + CRG + AES peripheral + SoCCore)
+├── constraints/
+│   └── soc.xdc             # PYNQ-Z2 pin constraints (clock, reset, UART, LEDs)
+├── Makefile                # Build automation
+└── README.md               # This file
+```
+
+## Quick Start
+
+### 1. Install LiteX and dependencies
+
+```sh
+pip install migen litex
+./litex_setup.py --init --install --user --config=standard
+```
+
+### 2. Install a RISC-V toolchain
+
+```sh
+pip install meson ninja
+./litex_setup.py --gcc=riscv
+```
+
+### 3. Build the gateware (requires Vivado on PATH)
+
+```sh
+make gateware
+# or directly:
+python3 soc_litex.py --build
+```
+
+### 4. Build the firmware
+
+```sh
+make firmware
+```
+
+### 5. Program the FPGA
+
+```sh
+make load
+# or:
+python3 soc_litex.py --load
+```
+
+### 6. Open a UART terminal
+
+Connect a USB-UART adapter to PMOD JA1 (TX) and JA2 (RX), then:
+```sh
+screen /dev/ttyUSB0 115200
+# or
+minicom -b 115200 -D /dev/ttyUSB0
+```
+
+Expected output:
+```
+=== AES-128 Accelerator (LiteX / PYNQ-Z2) ===
+Plaintext  : Hello, PYNQ-Z2!
+Ciphertext : XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+Decrypted  : Hello, PYNQ-Z2!
+PASS: Decrypted output matches original plaintext.
+```
+
+## AES Core Architecture
+
+The AES datapath uses a sequential FSM with a 11-cycle encryption/decryption
+latency:
+
+```
+IDLE ──(start pulse)──► load state_reg = din XOR RK[0 or 10]
+                          │
+                          ▼ round=1..9  (full round + MixColumns)
+                        WORK
+                          │ round=10  (final round, no MixColumns)
+                          ▼
+                        assert done, output dout, return to IDLE
+```
+
+Key expansion is fully combinatorial: all 11 round keys are available in the
+same clock cycle as the key input.
+
+## CSR Map (AES Peripheral)
+
+All registers are 32-bit.  Exact base address is assigned by LiteX and
+reported in `build/csr.json` after synthesis.
+
+| Offset | Name   | R/W | Description                        |
+|--------|--------|-----|------------------------------------|
+| 0x00   | ctrl   | W   | [0]=start, [1]=mode (0=enc,1=dec)  |
+| 0x04   | status | R   | [0]=done,  [1]=busy                |
+| 0x08   | key0   | W   | Key [127:96]                       |
+| 0x0c   | key1   | W   | Key [95:64]                        |
+| 0x10   | key2   | W   | Key [63:32]                        |
+| 0x14   | key3   | W   | Key [31:0]                         |
+| 0x18   | din0   | W   | Data-in [127:96]                   |
+| 0x1c   | din1   | W   | Data-in [95:64]                    |
+| 0x20   | din2   | W   | Data-in [63:32]                    |
+| 0x24   | din3   | W   | Data-in [31:0]                     |
+| 0x28   | dout0  | R   | Data-out [127:96]                  |
+| 0x2c   | dout1  | R   | Data-out [95:64]                   |
+| 0x30   | dout2  | R   | Data-out [63:32]                   |
+| 0x34   | dout3  | R   | Data-out [31:0]                    |
+
+## FIPS-197 Compliance
+
+The core is designed to produce correct results for the FIPS-197 Appendix B
+test vector:
+- **Key:**       `2b7e151628aed2a6abf7158809cf4f3c`
+- **Plaintext:** `3243f6a8885a308d313198a2e0370734`
+- **Ciphertext:**`3925841d02dc09fbdc118597196a0b32`
+
+---
+
 <p align="center"><img src="https://raw.githubusercontent.com/enjoy-digital/litex/master/doc/litex.png"></p>
 
 ```
