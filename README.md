@@ -99,7 +99,7 @@ PASS: Decrypted output matches original plaintext.
 
 ## AES Core Architecture
 
-The AES datapath uses a sequential FSM with a 11-cycle encryption/decryption
+The AES datapath uses a sequential FSM with an 11-cycle encryption/decryption
 latency:
 
 ```
